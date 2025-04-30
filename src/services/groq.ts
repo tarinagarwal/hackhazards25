@@ -7,7 +7,7 @@ if (!import.meta.env.VITE_GROQ_API_KEY) {
   throw new Error("GROQ API key is not configured");
 }
 
-// Initialize GROQ SDK
+// Initialize GROQ SDK with proper configuration
 const groq = new Groq({
   apiKey: import.meta.env.VITE_GROQ_API_KEY,
   dangerouslyAllowBrowser: true,
@@ -142,10 +142,11 @@ Format longer responses with appropriate Markdown:
  * Generate a course outline for a given topic
  */
 export async function generateCourseOutline(
-  topic: string
+  topic: string,
+  retryCount = 0
 ): Promise<CourseOutline> {
   try {
-    const prompt = `Create a comprehensive course outline for "${topic}". Respond with a JSON array ONLY. DO NOT include any other text, explanations, or introductions. Follow the following structure.
+    const prompt = `Create a comprehensive course outline for "${topic}". Respond with a JSON object ONLY. DO NOT include any other text, explanations, or introductions. Follow this structure:
 {
   "title": "Course title",
   "description": "A comprehensive description of the course",
@@ -169,13 +170,34 @@ Make sure the outline is:
       model: "llama-3.1-8b-instant",
       temperature: 0.7,
       max_tokens: 2048,
+      stream: false,
     });
 
     const response = completion.choices[0]?.message?.content || "{}";
-    return JSON.parse(response);
-  } catch (error) {
+
+    // Handle retry for invalid JSON
+    try {
+      return JSON.parse(response);
+    } catch (parseError) {
+      if (retryCount < MAX_RETRIES) {
+        console.log(`Retrying... Attempt ${retryCount + 1} of ${MAX_RETRIES}`);
+        await sleep(RETRY_DELAY * (retryCount + 1));
+        return generateCourseOutline(topic, retryCount + 1);
+      }
+      throw parseError;
+    }
+  } catch (error: any) {
+    // Handle API errors with retry
+    if (error?.message?.includes("405") && retryCount < MAX_RETRIES) {
+      console.log(`Retrying... Attempt ${retryCount + 1} of ${MAX_RETRIES}`);
+      await sleep(RETRY_DELAY * (retryCount + 1));
+      return generateCourseOutline(topic, retryCount + 1);
+    }
+
     console.error("Error generating course outline:", error);
-    throw new Error("Failed to generate course outline");
+    throw new Error(
+      "Failed to generate course outline. Please try again later."
+    );
   }
 }
 
